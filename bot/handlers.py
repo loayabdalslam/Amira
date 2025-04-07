@@ -9,6 +9,8 @@ import config
 # Import core modules
 from core.ai_therapist import AITherapist
 from core.emotion_analyzer import EmotionAnalyzer
+from core.localization import Localization
+from core.letting_go import LettingGoTechnique
 from data.models import Patient, Session, Interaction
 
 # Import reporting module
@@ -17,6 +19,12 @@ from reporting.report_generator import ReportGenerator
 # Initialize AI components
 ai_therapist = AITherapist()
 emotion_analyzer = EmotionAnalyzer()
+
+# Initialize localization with default language
+localization = Localization(config.DEFAULT_LANGUAGE)
+
+# Initialize letting go technique
+letting_go = LettingGoTechnique(localization)
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle the /start command to initiate conversation with the bot
@@ -34,16 +42,32 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     # Check if user is already registered
     patient = db.patients.find_one({"telegram_id": user.id})
     
+    # Set language preference if available
+    lang = config.DEFAULT_LANGUAGE
+    if patient and 'language' in patient:
+        lang = patient['language']
+    
+    # Update localization
+    localization.switch_language(lang)
+    
     if patient:
         # Create keyboard with options for returning users
         keyboard = [
-            [InlineKeyboardButton("View My Progress", callback_data="view_progress")],
-            [InlineKeyboardButton("Get Report", callback_data="get_report")],
-            [InlineKeyboardButton("Continue Conversation", callback_data="continue_conversation")]
+            [InlineKeyboardButton(localization.get_text('view_progress'), callback_data="view_progress")],
+            [InlineKeyboardButton(localization.get_text('get_report'), callback_data="get_report")],
+            [InlineKeyboardButton(localization.get_text('continue_conversation'), callback_data="continue_conversation")]
         ]
         
+        # Add language selection buttons
+        language_buttons = []
+        for lang_code, lang_name in config.SUPPORTED_LANGUAGES.items():
+            language_buttons.append(
+                InlineKeyboardButton(lang_name, callback_data=f"lang_{lang_code}")
+            )
+        keyboard.append(language_buttons)
+        
         await update.message.reply_text(
-            f"Welcome back, {patient['name']}! What would you like to do today?",
+            localization.get_text('welcome_back', name=patient['name']),
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         
@@ -56,11 +80,77 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         context.user_data["session"] = session
         return 'CONVERSATION'
     else:
+        # Ask for language preference first
+        keyboard = []
+        for lang_code, lang_name in config.SUPPORTED_LANGUAGES.items():
+            keyboard.append([InlineKeyboardButton(lang_name, callback_data=f"lang_{lang_code}_new")])
+        
         await update.message.reply_text(
-            f"Hello {user.first_name}! I'm AMIRA, your AI therapeutic assistant. "
-            f"To get started, please tell me your full name."
+            "Please select your preferred language / من فضلك اختر لغتك المفضلة",
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
-        return 'REGISTER'
+        return 'LANGUAGE'
+
+async def language_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle language selection
+    
+    Args:
+        update: The update object from Telegram
+        context: The context object from Telegram
+        
+    Returns:
+        int: The next conversation state
+    """
+    query = update.callback_query
+    await query.answer()
+    
+    # Get the callback data
+    data = query.data
+    
+    # Extract language code
+    if data.startswith("lang_"):
+        parts = data.split("_")
+        lang_code = parts[1]
+        
+        # Update localization
+        localization.switch_language(lang_code)
+        
+        # Store language preference
+        context.user_data["language"] = lang_code
+        
+        # Check if this is a new user or existing user changing language
+        if len(parts) > 2 and parts[2] == "new":
+            # New user, continue with registration
+            await query.edit_message_text(
+                localization.get_text('welcome', name=query.from_user.first_name)
+            )
+            return 'REGISTER'
+        else:
+            # Existing user changing language
+            user = update.effective_user
+            db = context.bot_data['db']
+            
+            # Update language preference in database
+            db.patients.update_one(
+                {"telegram_id": user.id},
+                {"$set": {"language": lang_code}}
+            )
+            
+            # Get updated patient data
+            patient = db.patients.find_one({"telegram_id": user.id})
+            
+            # Create keyboard with options for returning users
+            keyboard = [
+                [InlineKeyboardButton(localization.get_text('view_progress'), callback_data="view_progress")],
+                [InlineKeyboardButton(localization.get_text('get_report'), callback_data="get_report")],
+                [InlineKeyboardButton(localization.get_text('continue_conversation'), callback_data="continue_conversation")]
+            ]
+            
+            await query.edit_message_text(
+                localization.get_text('welcome_back', name=patient['name']),
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            return 'CONVERSATION'
 
 async def register_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle user registration
@@ -72,23 +162,87 @@ async def register_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     Returns:
         int: The next conversation state
     """
-    user = update.effective_user
-    db = context.bot_data['db']
-    
     # Store user's name
     name = update.message.text
     context.user_data["name"] = name
     
+    # Ask about nationality
+    await update.message.reply_text(
+        localization.get_text('ask_nationality', name=name)
+    )
+    
+    return 'NATIONALITY'
+
+async def nationality_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle nationality collection
+    
+    Args:
+        update: The update object from Telegram
+        context: The context object from Telegram
+        
+    Returns:
+        int: The next conversation state
+    """
+    # Store user's nationality
+    nationality = update.message.text
+    context.user_data["nationality"] = nationality
+    
+    # Ask about age
+    await update.message.reply_text(
+        localization.get_text('ask_age')
+    )
+    
+    return 'AGE'
+
+async def age_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle age collection
+    
+    Args:
+        update: The update object from Telegram
+        context: The context object from Telegram
+        
+    Returns:
+        int: The next conversation state
+    """
+    # Store user's age
+    try:
+        age = int(update.message.text)
+        context.user_data["age"] = age
+    except ValueError:
+        # If not a valid number, store as string
+        context.user_data["age"] = update.message.text
+    
+    # Ask about education
+    await update.message.reply_text(
+        localization.get_text('ask_education')
+    )
+    
+    return 'EDUCATION'
+
+async def education_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle education collection
+    
+    Args:
+        update: The update object from Telegram
+        context: The context object from Telegram
+        
+    Returns:
+        int: The next conversation state
+    """
+    # Store user's education
+    education = update.message.text
+    context.user_data["education"] = education
+    
     # Ask about their condition
     conditions_keyboard = [
-        [InlineKeyboardButton("Depression", callback_data="depression")],
-        [InlineKeyboardButton("Bipolar Disorder", callback_data="bipolar")],
-        [InlineKeyboardButton("OCD", callback_data="ocd")],
-        [InlineKeyboardButton("Not sure", callback_data="unknown")]
+        [InlineKeyboardButton(localization.get_text('depression'), callback_data="depression")],
+        [InlineKeyboardButton(localization.get_text('bipolar'), callback_data="bipolar")],
+        [InlineKeyboardButton(localization.get_text('ocd'), callback_data="ocd")],
+        [InlineKeyboardButton(localization.get_text('unknown'), callback_data="unknown")]
     ]
     
     await update.message.reply_text(
-        f"Thank you, {name}. Which of these conditions best describes what you're experiencing?",
+        localization.get_text('ask_condition'),
         reply_markup=InlineKeyboardMarkup(conditions_keyboard)
     )
     
@@ -119,7 +273,11 @@ async def condition_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             {"telegram_id": user.id},
             {"$set": {
                 "name": context.user_data["name"],
-                "condition": condition
+                "nationality": context.user_data.get("nationality"),
+                "age": context.user_data.get("age"),
+                "education": context.user_data.get("education"),
+                "condition": condition,
+                "language": context.user_data.get("language", config.DEFAULT_LANGUAGE)
             }}
         )
         patient_id = existing_patient["_id"]
@@ -129,7 +287,11 @@ async def condition_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         patient = Patient(
             telegram_id=user.id,
             name=context.user_data["name"],
+            nationality=context.user_data.get("nationality"),
+            age=context.user_data.get("age"),
+            education=context.user_data.get("education"),
             condition=condition,
+            language=context.user_data.get("language", config.DEFAULT_LANGUAGE),
             registration_date=datetime.datetime.now()
         )
         
@@ -145,12 +307,16 @@ async def condition_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     }
     context.user_data["session"] = session
     
-    # Send welcome message
-    await update.message.reply_text(
-        f"Thank you for sharing that information. I'm here to help you with your {condition}. "
-        f"You can talk to me about how you're feeling, and I'll do my best to provide support and guidance. "
-        f"What's been on your mind lately?"
-    )
+    # Send welcome message with progress tracking button
+    message = localization.get_text('registration_complete', condition=condition)
+    
+    # Add progress tracking button
+    keyboard = letting_go.get_progress_keyboard(str(patient_id))
+    
+    if update.callback_query:
+        await update.callback_query.edit_message_text(message, reply_markup=keyboard)
+    else:
+        await update.message.reply_text(message, reply_markup=keyboard)
     
     return 'CONVERSATION'
 
@@ -168,19 +334,51 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     db = context.bot_data['db']
     message_text = update.message.text
     
+    # Get patient data
+    patient = db.patients.find_one({"telegram_id": user.id})
+    if not patient:
+        # Redirect to start if patient record not found
+        await update.message.reply_text(
+            "I couldn't find your records. Let's start over."
+        )
+        return await start_handler(update, context)
+    
+    # Set language preference
+    lang = patient.get('language', config.DEFAULT_LANGUAGE)
+    localization.switch_language(lang)
+    
     # Analyze emotions in the message
     emotion_analysis = emotion_analyzer.analyze(message_text)
     
-    # Get AI therapist response
-    patient = db.patients.find_one({"telegram_id": user.id})
-    response = ai_therapist.generate_response(message_text, emotion_analysis, patient["condition"])
+    # Determine if we should use the letting go technique
+    # Check if the emotion is negative and could benefit from letting go
+    use_letting_go = False
+    if emotion_analysis and 'dominant_emotion' in emotion_analysis:
+        negative_emotions = ['anger', 'fear', 'sadness', 'disgust', 'anxiety', 'stress']
+        if emotion_analysis['dominant_emotion'].lower() in negative_emotions:
+            use_letting_go = True
     
-    # Record interaction
+    # Get AI therapist response with appropriate language and technique
+    response = ai_therapist.generate_response(
+        message_text, 
+        emotion_analysis, 
+        patient["condition"],
+        language=lang,
+        use_letting_go=use_letting_go
+    )
+    
+    # Record interaction with metadata about technique used
+    metadata = {
+        'technique': 'letting_go' if use_letting_go else 'standard',
+        'language': lang
+    }
+    
     interaction = Interaction(
         timestamp=datetime.datetime.now(),
         user_message=message_text,
         bot_response=response,
-        emotion_analysis=emotion_analysis
+        emotion_analysis=emotion_analysis,
+        metadata=metadata
     )
     
     # Add to current session
@@ -196,8 +394,21 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
         db.sessions.insert_one(session.to_dict())
     
-    # Send response to user
-    await update.message.reply_text(response)
+    # Create progress tracking button
+    keyboard = letting_go.get_progress_keyboard(str(patient["_id"]))
+    
+    # Send response to user with progress tracking button
+    await update.message.reply_text(response, reply_markup=keyboard)
+    
+    # If using letting go technique and not already in a letting go flow, offer to try it
+    if use_letting_go and not context.user_data.get("letting_go_active"):
+        # Only suggest letting go technique occasionally to avoid being repetitive
+        if len(context.user_data["session"]["interactions"]) % 3 == 0:
+            context.user_data["letting_go_active"] = True
+            await update.message.reply_text(
+                localization.get_text('letting_go_prompt'),
+                reply_markup=letting_go.get_prompt_keyboard()
+            )
     
     return 'CONVERSATION'
 
@@ -208,14 +419,21 @@ async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         update: The update object from Telegram
         context: The context object from Telegram
     """
-    help_text = (
-        "I'm AMIRA, your AI therapeutic assistant. Here's how you can interact with me:\n\n"
-        "/start - Start or resume a conversation\n"
-        "/help - Show this help message\n"
-        "/end - End the current conversation\n\n"
-        "You can talk to me about how you're feeling, and I'll do my best to provide support "
-        "and guidance based on your specific situation."
-    )
+    user = update.effective_user
+    db = context.bot_data['db']
+    
+    # Get language preference
+    lang = config.DEFAULT_LANGUAGE
+    patient = db.patients.find_one({"telegram_id": user.id})
+    if patient and 'language' in patient:
+        lang = patient['language']
+    
+    # Update localization
+    localization.switch_language(lang)
+    
+    # Get localized help text
+    help_text = localization.get_text('help_text')
+    
     await update.message.reply_text(help_text)
 
 async def end_conversation_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -231,6 +449,15 @@ async def end_conversation_handler(update: Update, context: ContextTypes.DEFAULT
     user = update.effective_user
     db = context.bot_data['db']
     
+    # Get language preference
+    lang = config.DEFAULT_LANGUAGE
+    patient = db.patients.find_one({"telegram_id": user.id})
+    if patient and 'language' in patient:
+        lang = patient['language']
+    
+    # Update localization
+    localization.switch_language(lang)
+    
     # Save the current session to database
     if "session" in context.user_data:
         session = Session(
@@ -244,10 +471,7 @@ async def end_conversation_handler(update: Update, context: ContextTypes.DEFAULT
         # Clear session data
         context.user_data.clear()
     
-    await update.message.reply_text(
-        "Thank you for talking with me today. I hope our conversation was helpful. "
-        "You can start a new conversation anytime by sending /start. Take care!"
-    )
+    await update.message.reply_text(localization.get_text('end_conversation'))
     
     return ConversationHandler.END
 
@@ -269,7 +493,107 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     user = update.effective_user
     db = context.bot_data['db']
     
-    if data in config.SUPPORTED_CONDITIONS or data == "unknown":
+    # Handle language selection
+    if data.startswith("lang_"):
+        return await language_handler(update, context)
+    
+    # Handle letting go technique responses
+    if data == "letting_go_yes":
+        # User wants to try the letting go technique
+        patient = db.patients.find_one({"telegram_id": user.id})
+        lang = patient.get('language', config.DEFAULT_LANGUAGE)
+        localization.switch_language(lang)
+        
+        # Send the letting go steps
+        await query.edit_message_text(letting_go.get_introduction())
+        
+        # Send the first step
+        keyboard = letting_go.get_progress_keyboard(str(patient["_id"]))
+        await update.effective_chat.send_message(
+            letting_go.get_step_prompt(1),
+            reply_markup=keyboard
+        )
+        
+        return 'CONVERSATION'
+    
+    elif data == "letting_go_no":
+        # User doesn't want to try the letting go technique
+        patient = db.patients.find_one({"telegram_id": user.id})
+        lang = patient.get('language', config.DEFAULT_LANGUAGE)
+        localization.switch_language(lang)
+        
+        # Reset the letting go active flag
+        context.user_data["letting_go_active"] = False
+        
+        # Send acknowledgment
+        keyboard = letting_go.get_progress_keyboard(str(patient["_id"]))
+        await query.edit_message_text(
+            localization.get_text('how_feeling_today', name=patient['name']),
+            reply_markup=keyboard
+        )
+        
+        return 'CONVERSATION'
+    
+    # Handle progress tracking
+    elif data.startswith("progress_"):
+        # Extract session ID from callback data
+        session_id = data.split("_")[1]
+        
+        patient = db.patients.find_one({"telegram_id": user.id})
+        if not patient:
+            await query.edit_message_text("I couldn't find your records. Please start a new conversation with /start.")
+            return ConversationHandler.END
+        
+        # Set language preference
+        lang = patient.get('language', config.DEFAULT_LANGUAGE)
+        localization.switch_language(lang)
+        
+        # Get current session data
+        session_data = context.user_data.get("session", {})
+        
+        # Calculate progress metrics
+        metrics = letting_go.track_progress(patient, session_data)
+        
+        # Generate progress message
+        progress_message = f"*{localization.get_text('progress_report_title')}*\n\n"
+        
+        # Add progress percentage
+        progress_percentage = metrics.get('progress_percentage', 0)
+        progress_bar = "" + "█" * (progress_percentage // 10) + "░" * (10 - progress_percentage // 10)
+        progress_message += f"{progress_bar} {progress_percentage}%\n\n"
+        
+        # Add technique usage
+        technique_count = metrics.get('technique_used_count', 0)
+        progress_message += f"Letting Go technique used: {technique_count} times\n\n"
+        
+        # Add emotional trend if available
+        recent_emotions = []
+        for interaction in session_data.get('interactions', []):
+            if "emotion_analysis" in interaction:
+                emotion_analysis = interaction["emotion_analysis"]
+                if isinstance(emotion_analysis, dict) and "dominant_emotion" in emotion_analysis:
+                    recent_emotions.append(emotion_analysis["dominant_emotion"])
+        
+        if recent_emotions:
+            progress_message += f"{localization.get_text('emotional_trends')}\n"
+            for emotion in set(recent_emotions):
+                count = recent_emotions.count(emotion)
+                progress_message += f"- {emotion.capitalize()}: {count} times\n"
+        
+        # Add buttons to continue
+        keyboard = [
+            [InlineKeyboardButton(localization.get_text('continue_conversation'), callback_data="continue_conversation")]
+        ]
+        
+        await query.edit_message_text(
+            progress_message,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
+        
+        return 'CONVERSATION'
+    
+    elif data in config.SUPPORTED_CONDITIONS or data == "unknown":
         # Handle condition selection
         # Check if user already exists in database
         existing_patient = db.patients.find_one({"telegram_id": user.id})
@@ -280,7 +604,11 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
                 {"telegram_id": user.id},
                 {"$set": {
                     "name": context.user_data["name"],
-                    "condition": data
+                    "nationality": context.user_data.get("nationality"),
+                    "age": context.user_data.get("age"),
+                    "education": context.user_data.get("education"),
+                    "condition": data,
+                    "language": context.user_data.get("language", config.DEFAULT_LANGUAGE)
                 }}
             )
             patient_id = existing_patient["_id"]
@@ -290,7 +618,11 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             patient = Patient(
                 telegram_id=user.id,
                 name=context.user_data["name"],
+                nationality=context.user_data.get("nationality"),
+                age=context.user_data.get("age"),
+                education=context.user_data.get("education"),
                 condition=data,
+                language=context.user_data.get("language", config.DEFAULT_LANGUAGE),
                 registration_date=datetime.datetime.now()
             )
             
@@ -306,19 +638,17 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         }
         context.user_data["session"] = session
         
-        # Send welcome message
-        condition_name = {
-            "depression": "depression",
-            "bipolar": "bipolar disorder",
-            "ocd": "obsessive-compulsive disorder",
-            "unknown": "concerns"
-        }[data]
+        # Get localized condition name
+        condition_key = data if data != "unknown" else "unknown"
+        condition_name = localization.get_text(condition_key)
         
-        await query.edit_message_text(
-            f"Thank you for sharing that information. I'm here to help you with your {condition_name}. "
-            f"You can talk to me about how you're feeling, and I'll do my best to provide support and guidance. "
-            f"What's been on your mind lately?"
-        )
+        # Send welcome message with progress tracking button
+        message = localization.get_text('registration_complete', condition=condition_name)
+        
+        # Add progress tracking button
+        keyboard = letting_go.get_progress_keyboard(str(patient_id))
+        
+        await query.edit_message_text(message, reply_markup=keyboard)
         
         return 'CONVERSATION'
     

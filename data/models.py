@@ -7,24 +7,36 @@ class Patient:
     Attributes:
         telegram_id (int): Telegram user ID
         name (str): Patient's name
+        nationality (str): Patient's nationality
+        age (int): Patient's age
+        education (str): Patient's education level or current studies
         condition (str): Mental health condition (depression, bipolar, ocd, unknown)
+        language (str): Preferred language ('en' or 'ar')
         registration_date (datetime): Date and time of registration
         metadata (dict): Additional patient metadata
     """
     
-    def __init__(self, telegram_id, name, condition, registration_date=None, metadata=None):
+    def __init__(self, telegram_id, name, nationality=None, age=None, education=None, condition=None, language='en', registration_date=None, metadata=None):
         """Initialize a new Patient object
         
         Args:
             telegram_id (int): Telegram user ID
             name (str): Patient's name
-            condition (str): Mental health condition
+            nationality (str, optional): Patient's nationality
+            age (int, optional): Patient's age
+            education (str, optional): Patient's education level or current studies
+            condition (str, optional): Mental health condition
+            language (str, optional): Preferred language ('en' or 'ar')
             registration_date (datetime, optional): Registration date and time
             metadata (dict, optional): Additional patient metadata
         """
         self.telegram_id = telegram_id
         self.name = name
+        self.nationality = nationality
+        self.age = age
+        self.education = education
         self.condition = condition
+        self.language = language
         self.registration_date = registration_date or datetime.now()
         self.metadata = metadata or {}
     
@@ -37,7 +49,11 @@ class Patient:
         return {
             "telegram_id": self.telegram_id,
             "name": self.name,
+            "nationality": self.nationality,
+            "age": self.age,
+            "education": self.education,
             "condition": self.condition,
+            "language": self.language,
             "registration_date": self.registration_date,
             "metadata": self.metadata
         }
@@ -55,7 +71,11 @@ class Patient:
         return cls(
             telegram_id=data["telegram_id"],
             name=data["name"],
-            condition=data["condition"],
+            nationality=data.get("nationality"),
+            age=data.get("age"),
+            education=data.get("education"),
+            condition=data.get("condition"),
+            language=data.get("language", "en"),
             registration_date=data.get("registration_date"),
             metadata=data.get("metadata", {})
         )

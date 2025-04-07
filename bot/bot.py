@@ -27,14 +27,28 @@ def setup_bot(db):
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start_handler)],
         states={
+            'LANGUAGE': [
+                CallbackQueryHandler(language_handler)
+            ],
             'REGISTER': [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, register_handler)
             ],
+            'NATIONALITY': [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, nationality_handler)
+            ],
+            'AGE': [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, age_handler)
+            ],
+            'EDUCATION': [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, education_handler)
+            ],
             'CONDITION': [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, condition_handler)
+                MessageHandler(filters.TEXT & ~filters.COMMAND, condition_handler),
+                CallbackQueryHandler(callback_query_handler)
             ],
             'CONVERSATION': [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler)
+                MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler),
+                CallbackQueryHandler(callback_query_handler)
             ],
         },
         fallbacks=[CommandHandler('end', end_conversation_handler)],

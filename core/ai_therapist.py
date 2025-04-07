@@ -4,22 +4,35 @@ import json
 
 # Import configuration
 import config
+from core.localization import Localization
+from core.letting_go import LettingGoTechnique
 
 class AITherapist:
     """AI Therapist class that uses Gemini 2 to generate responses
     
     This class handles the interaction with the Gemini 2 API to generate
     therapeutic responses based on user messages, emotional analysis,
-    and the patient's condition.
+    and the patient's condition. It incorporates the Letting Go technique
+    by David R. Hawkins and supports multiple languages.
     """
     
-    def __init__(self):
-        """Initialize the AI Therapist with Gemini 2 API"""
+    def __init__(self, language='en'):
+        """Initialize the AI Therapist with Gemini 2 API
+        
+        Args:
+            language (str, optional): Language code ('en' or 'ar')
+        """
         # Configure the Gemini API
         genai.configure(api_key=config.GEMINI_API_KEY)
         
         # Get the generative model
         self.model = genai.GenerativeModel('gemini-2.0-flash')
+        
+        # Initialize localization
+        self.localization = Localization(language)
+        
+        # Initialize letting go technique
+        self.letting_go = LettingGoTechnique(self.localization)
         
         # Define system prompts for different conditions
         self.system_prompts = {
@@ -29,22 +42,40 @@ class AITherapist:
             'unknown': self._get_general_prompt()
         }
         
-        logger.info("AI Therapist initialized with Gemini 2")
+        logger.info(f"AI Therapist initialized with Gemini 2 in language: {language}")
     
-    def generate_response(self, user_message, emotion_analysis, condition):
+    def generate_response(self, user_message, emotion_analysis, condition, language='en', use_letting_go=False):
         """Generate a therapeutic response based on user message and emotion analysis
         
         Args:
             user_message (str): The message from the user
             emotion_analysis (dict): Emotional analysis of the user message
             condition (str): The mental health condition of the patient
+            language (str, optional): Language code ('en' or 'ar')
+            use_letting_go (bool, optional): Whether to incorporate the Letting Go technique
             
         Returns:
             str: The generated therapeutic response
         """
         try:
+            # Update language if needed
+            if self.localization.language != language:
+                self.localization.switch_language(language)
+            
             # Get the appropriate system prompt based on condition
             system_prompt = self.system_prompts.get(condition, self.system_prompts['unknown'])
+            
+            # Add Letting Go technique instructions if requested
+            if use_letting_go:
+                letting_go_instructions = """
+                Incorporate the Letting Go technique by David R. Hawkins in your response. This technique involves:
+                1. Acknowledging the emotion without judgment
+                2. Feeling the emotion fully in the body
+                3. Asking if one is willing to let it go
+                4. Asking when one could let it go
+                Guide the user through these steps in a conversational way.
+                """
+                system_prompt += letting_go_instructions
             
             # Create the prompt with emotion analysis
             emotion_info = json.dumps(emotion_analysis, indent=2)
@@ -58,7 +89,10 @@ class AITherapist:
         
         except Exception as e:
             logger.error(f"Error generating response: {e}")
-            return "I'm having trouble processing that right now. Could you please try expressing that in a different way?"
+            error_message = "I'm having trouble processing that right now. Could you please try expressing that in a different way?"
+            if language == 'ar':
+                error_message = "أواجه صعوبة في معالجة ذلك الآن. هل يمكنك محاولة التعبير عن ذلك بطريقة مختلفة؟"
+            return error_message
     
     def _get_depression_prompt(self):
         """Get the system prompt for depression"""
@@ -74,6 +108,11 @@ class AITherapist:
         5. Validate the patient's feelings while gently challenging negative thought patterns
         6. Provide practical, actionable suggestions that are tailored to the patient's situation
         7. Use a conversational, natural tone that builds rapport and trust
+        8. Incorporate the Letting Go technique by David R. Hawkins when appropriate, which involves:
+           - Acknowledging emotions without judgment
+           - Feeling emotions fully in the body
+           - Asking if one is willing to let go of the emotion
+           - Asking when one could let go of the emotion
         
         Remember to consider the emotional analysis provided with each message to tailor your response appropriately.
         """
@@ -92,6 +131,11 @@ class AITherapist:
         5. Teach recognition of early warning signs of mood episodes
         6. Validate the patient's experiences while providing balanced perspective
         7. Use a conversational, natural tone that builds rapport and trust
+        8. Incorporate the Letting Go technique by David R. Hawkins when appropriate, which involves:
+           - Acknowledging emotions without judgment
+           - Feeling emotions fully in the body
+           - Asking if one is willing to let go of the emotion
+           - Asking when one could let go of the emotion
         
         Remember to consider the emotional analysis provided with each message to tailor your response appropriately.
         Pay special attention to signs of elevated mood or depression that might indicate a mood episode.

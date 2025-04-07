@@ -25,5 +25,14 @@ SUPPORTED_CONDITIONS = [
     'ocd'
 ]
 
+# Supported Languages
+SUPPORTED_LANGUAGES = {
+    'en': 'English',
+    'ar': 'Arabic (Egyptian)'
+}
+
+# Default Language
+DEFAULT_LANGUAGE = 'en'
+
 # Therapy Session Configuration
 SESSION_TIMEOUT = int(os.getenv('SESSION_TIMEOUT', '1800'))  # 30 minutes in seconds
