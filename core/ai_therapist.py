@@ -42,21 +42,47 @@ class AITherapist:
             'unknown': self._get_general_prompt()
         }
         
+        # Track conversation history and session state
+        self.conversation_history = []
+        self.message_count = 0
+        self.session_active = False
+        
         logger.info(f"AI Therapist initialized with Gemini 2 in language: {language}")
     
-    def generate_response(self, user_message, emotion_analysis, condition, language='en', use_letting_go=False):
+    def generate_response(self, user_message, emotion_analysis, condition, language='en', use_letting_go=False, conversation_history=None, is_first_message=False, is_end_of_session=False):
         """Generate a therapeutic response based on user message and emotion analysis
         
         Args:
             user_message (str): The message from the user
             emotion_analysis (dict): Emotional analysis of the user message
-            condition (str): The mental health condition of the patient
+            condition (str): The psychological condition of the patient
             language (str, optional): Language code ('en' or 'ar')
-            use_letting_go (bool, optional): Whether to incorporate the Letting Go technique
+            use_letting_go (bool, optional): Whether to use the Letting Go technique
+            conversation_history (list, optional): List of previous messages in the conversation
+            is_first_message (bool, optional): Whether this is the first message in the session
+            is_end_of_session (bool, optional): Whether this is the end of the session (will generate comprehensive summary)
             
         Returns:
-            str: The generated therapeutic response
+            str: The therapeutic response formatted for Telegram
         """
+        # Update conversation history
+        if conversation_history is None:
+            conversation_history = []
+            
+        # Add user message to history
+        self.conversation_history.append({
+            'role': 'user',
+            'content': user_message,
+            'emotion': emotion_analysis
+        })
+        self.message_count += 1
+        
+        # Check if we should initiate a session after 5 messages
+        if not self.session_active and self.message_count >= 5:
+            self.session_active = True
+            session_prompt = self.localization.get_text('session_initiation')
+            return f"{session_prompt}\n\n{self._generate_emotion_aware_response(user_message, emotion_analysis, condition, language, use_letting_go, conversation_history, is_first_message, is_end_of_session)}"
+        
         # Use detected language from emotion analysis if available
         detected_language = emotion_analysis.get("detected_language", language)
         try:
@@ -79,15 +105,55 @@ class AITherapist:
                 """
                 system_prompt += letting_go_instructions
             
-            # Create the prompt with emotion analysis
+            # Format conversation history for context
+            history_context = ""
+            if conversation_history:
+                history_context = "\n\nPrevious conversation:\n" + "\n".join(
+                    f"{msg['role']}: {msg['content']}" for msg in conversation_history
+                )
+            
+            # Create the prompt with emotion analysis and conversation history
             emotion_info = json.dumps(emotion_analysis, indent=2)
-            prompt = f"{system_prompt}\n\nUser's emotional state: {emotion_info}\n\nUser message: {user_message}\n\nPlease respond in {detected_language} language.\n\nTherapeutic response:"
+            prompt = f"{system_prompt}\n\nUser's emotional state: {emotion_info}\n\nUser message: {user_message}{history_context}\n\nPlease respond in {detected_language} language.\n\nTherapeutic response:"
             
             # Generate response from Gemini 2
             response = self.model.generate_content(prompt)
             
+            # Format response for Telegram
+            response_text = response.text
+            
+            # Keep responses concise during conversation
+            if not is_end_of_session:
+                # Shorten response while maintaining key points
+                sentences = response_text.split('. ')
+                if len(sentences) > 1:
+                    response_text = '. '.join(sentences[:2]) + '.'
+            
+            if is_first_message:
+                greeting = self.localization.get_text('greeting')
+                response_text = f"{greeting}\n\n{response_text}"
+                # Add therapist response to history
+                self.conversation_history.append({
+                    'role': 'therapist',
+                    'content': response_text
+                })
+            elif is_end_of_session:
+                # Add comprehensive summary at end of session
+                summary_prompt = f"Create a comprehensive therapeutic summary of this session:\n\n{conversation_history}\n\nSummary should include:\n1. Key emotional patterns observed\n2. Progress made\n3. Recommendations\n4. Follow-up suggestions"
+                summary_response = self.model.generate_content(summary_prompt)
+                response_text = f"{response_text}\n\n--- SESSION SUMMARY ---\n{summary_response.text}"
+                # Reset session state
+                self.message_count = 0
+                self.session_active = False
+            
+            # Add therapist response to history
+            self.conversation_history.append({
+                'role': 'therapist',
+                'content': response_text
+            })
+            
             # Extract and return the text response
-            return response.text
+            return response_text
         
         except Exception as e:
             logger.error(f"Error generating response: {e}")
@@ -177,3 +243,35 @@ class AITherapist:
         
         Remember to consider the emotional analysis provided with each message to tailor your response appropriately.
         """
+        
+    def generate_report(self, conversation_history):
+        """Generate a comprehensive report from conversation history
+        
+        Args:
+            conversation_history (list): List of previous messages in the conversation
+            
+        Returns:
+            str: Comprehensive report including analysis and recommendations
+        """
+        try:
+            report_prompt = """Create a detailed therapeutic report from this conversation history:
+            
+            {history}
+            
+            The report should include:
+            1. Emotional patterns and trends
+            2. Key concerns and issues discussed
+            3. Progress and insights gained
+            4. Specific recommendations
+            5. Follow-up suggestions
+            6. Any potential concerns that may need professional attention
+            
+            Format the report clearly with sections and bullet points.
+            """.format(history="\n".join(f"{msg['role']}: {msg['content']}" for msg in conversation_history))
+            
+            response = self.model.generate_content(report_prompt)
+            return response.text
+            
+        except Exception as e:
+            logger.error(f"Error generating report: {e}")
+            return self.localization.get_text('error_report_generation')

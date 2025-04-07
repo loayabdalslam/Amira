@@ -409,13 +409,17 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if emotion_analysis['dominant_emotion'].lower() in negative_emotions:
             use_letting_go = True
     
+    # Get conversation history from session if available
+    conversation_history = context.user_data["session"].get("conversation_history", [])
+    
     # Get AI therapist response with appropriate language and technique
     response = ai_therapist.generate_response(
         message_text, 
         emotion_analysis, 
         patient["condition"],
         language=lang,
-        use_letting_go=use_letting_go
+        use_letting_go=use_letting_go,
+        conversation_history=conversation_history
     )
     
     # Record interaction with metadata about technique used
@@ -942,7 +946,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             await query.edit_message_text("I couldn't find your records. Please start a new conversation with /start.")
             return ConversationHandler.END
         
-        await query.edit_message_text(f"How are you feeling today, {patient['name']}? Tell me what's on your mind.")
+        await query.edit_message_text(localization.get_text('how_are_you_feeling', name=patient['name']))
         return 'CONVERSATION'
     
     return None

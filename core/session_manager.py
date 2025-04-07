@@ -1,7 +1,6 @@
 from datetime import datetime
 from typing import Dict, List, Optional
 from loguru import logger
-from data.database import Database
 from core.localization import Localization
 from bson import ObjectId
 
