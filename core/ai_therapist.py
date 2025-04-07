@@ -91,10 +91,8 @@ class AITherapist:
         
         except Exception as e:
             logger.error(f"Error generating response: {e}")
-            error_message = "I'm having trouble processing that right now. Could you please try expressing that in a different way?"
-            if language == 'ar':
-                error_message = "أواجه صعوبة في معالجة ذلك الآن. هل يمكنك محاولة التعبير عن ذلك بطريقة مختلفة؟"
-            return error_message
+            # Use localization for error message in the appropriate language
+            return self.localization.get_text('error_processing')
     
     def _get_depression_prompt(self):
         """Get the system prompt for depression"""

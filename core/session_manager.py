@@ -1,464 +1,458 @@
-"""Session Management module for AMIRA
-
-This module provides functionality for tracking and managing therapy sessions,
-storing conversation history, and generating reports between sessions.
-"""
-
-import datetime
+from datetime import datetime
+from typing import Dict, List, Optional
 from loguru import logger
-import json
-
-# Import core modules
-from core.emotion_analyzer import EmotionAnalyzer
+from data.database import Database
 from core.localization import Localization
-from data.models import Session, Interaction, Report
+from bson import ObjectId
 
 class SessionManager:
-    """Session Manager class for handling therapy sessions
-    
-    This class manages the lifecycle of therapy sessions, including:
-    - Starting and ending sessions
-    - Tracking conversation history
-    - Generating session summaries and reports
-    - Analyzing psychological conditions based on conversation content
-    """
-    
     def __init__(self, db, language='en'):
-        """Initialize the Session Manager
-        
-        Args:
-            db: MongoDB database connection
-            language (str, optional): Language code ('en' or 'ar')
-        """
         self.db = db
-        self.emotion_analyzer = EmotionAnalyzer()
         self.localization = Localization(language)
-        logger.info(f"Session Manager initialized with language: {language}")
     
-    def start_session(self, patient_id):
-        """Start a new therapy session
+    def start_session(self, patient_id) -> Dict:
+        """Start a new session for a patient
         
         Args:
-            patient_id: The ID of the patient
+            patient_id: The patient's ID
             
         Returns:
-            dict: The session data
+            Dict: The session object
         """
-        # Create a new session
         session = {
-            "patient_id": patient_id,
-            "start_time": datetime.datetime.now(),
-            "interactions": [],
-            "session_id": str(datetime.datetime.now().timestamp()),
-            "metadata": {
-                "condition_classifications": [],
-                "emotional_states": [],
-                "techniques_used": []
-            }
+            'patient_id': patient_id,
+            'session_id': str(datetime.now().timestamp()),
+            'start_time': datetime.now(),
+            'interactions': [],
+            'metadata': {'techniques_used': []},
+            'conversation_history': []
         }
-        
-        logger.info(f"Started new session for patient {patient_id}")
         return session
     
-    def end_session(self, session_data):
-        """End a therapy session and save it to the database
+    def create_session(self, user_id: int, language: str = 'en') -> Dict:
+        """Create a new session for a user"""
+        session = {
+            'user_id': user_id,
+            'session_id': str(datetime.now().timestamp()),
+            'start_time': datetime.now(),
+            'language': language,
+            'messages': [],
+            'emotional_states': [],
+            'progress': {},
+            'diagnosis_progress': {}
+        }
+        
+        self.db.save_session(session)
+        return session
+    
+    def add_message(self, session_id: str, message: Dict) -> None:
+        """Add a message to the session history"""
+        message['timestamp'] = datetime.now()
+        self.db.add_message_to_session(session_id, message)
+    
+    def get_conversation_history(self, session_id: str) -> List[Dict]:
+        """Get the complete conversation history for a session"""
+        return self.db.get_session_messages(session_id)
+        
+    def add_interaction(self, session, user_message, bot_response, emotion_analysis) -> Dict:
+        """Add an interaction to the session and update conversation history
         
         Args:
-            session_data (dict): The session data
+            session: The current session object
+            user_message: The message from the user
+            bot_response: The response from the bot
+            emotion_analysis: Emotional analysis of the user message
             
         Returns:
-            str: The ID of the saved session
+            Dict: The updated session object
         """
-        # Update end time
-        session_data["end_time"] = datetime.datetime.now()
+        # Create interaction object
+        interaction = {
+            'timestamp': datetime.now(),
+            'user_message': user_message,
+            'bot_response': bot_response,
+            'emotion_analysis': emotion_analysis
+        }
         
-        # Generate session summary
-        summary = self._generate_session_summary(session_data)
-        session_data["summary"] = summary
+        # Add to interactions list
+        if 'interactions' not in session:
+            session['interactions'] = []
+        session['interactions'].append(interaction)
         
-        # Create Session object
-        session = Session(
-            patient_id=session_data["patient_id"],
-            start_time=session_data["start_time"],
-            end_time=session_data["end_time"],
-            interactions=session_data["interactions"],
-            summary=summary,
-            metrics=self._calculate_session_metrics(session_data)
-        )
+        # Update conversation history
+        if 'conversation_history' not in session:
+            session['conversation_history'] = []
+        session['conversation_history'].append({
+            'role': 'user',
+            'content': user_message,
+            'timestamp': datetime.now()
+        })
+        session['conversation_history'].append({
+            'role': 'assistant',
+            'content': bot_response,
+            'timestamp': datetime.now()
+        })
+        
+        # Update emotional state if available
+        if emotion_analysis and 'dominant_emotion' in emotion_analysis:
+            self.update_emotional_state(
+                session.get('session_id', str(datetime.now().timestamp())),
+                emotion_analysis['dominant_emotion'],
+                emotion_analysis.get('intensity', 0.5)
+            )
+            
+            # Update diagnosis progress based on emotion
+            if 'condition' in session:
+                progress = self._calculate_progress(session['condition'], emotion_analysis)
+                self.update_diagnosis_progress(
+                    session.get('session_id', str(datetime.now().timestamp())),
+                    session['condition'],
+                    progress
+                )
+        
+        return session
+        
+    def _calculate_progress(self, condition, emotion_analysis):
+        """Calculate progress for a condition based on emotional analysis
+        
+        Args:
+            condition: The psychological condition
+            emotion_analysis: Emotional analysis data
+            
+        Returns:
+            float: Progress value between 0 and 1
+        """
+        # Simple implementation - can be enhanced with more sophisticated algorithms
+        positive_emotions = ['joy', 'happiness', 'calm', 'contentment', 'relief']
+        if emotion_analysis and 'dominant_emotion' in emotion_analysis:
+            if emotion_analysis['dominant_emotion'].lower() in positive_emotions:
+                return 0.1  # Small progress for positive emotions
+        return 0.05  # Minimal progress for other emotions
+    
+    def update_emotional_state(self, session_id: str, emotion: str, intensity: float) -> None:
+        """Update the emotional state tracking for the session"""
+        emotional_state = {
+            'emotion': emotion,
+            'intensity': intensity,
+            'timestamp': datetime.now()
+        }
+        self.db.update_session_emotional_state(session_id, emotional_state)
+    
+    def update_diagnosis_progress(self, session_id: str, diagnosis: str, progress: float) -> None:
+        """Update the progress for a specific diagnosis"""
+        self.db.update_diagnosis_progress(session_id, diagnosis, progress)
+    
+    def get_diagnosis_progress(self, user_id: int) -> Dict:
+        """Get the progress for all diagnoses for a user"""
+        return self.db.get_user_diagnosis_progress(user_id)
+    
+    def get_session_language(self, session_id: str) -> str:
+        """Get the language setting for a session"""
+        session = self.db.get_session(session_id)
+        return session.get('language', 'en')
+    
+    def set_session_language(self, session_id: str, language: str) -> None:
+        """Set the language for a session"""
+        self.db.update_session_language(session_id, language)
+        self.localization.switch_language(language)
+    
+    def get_session_summary(self, session_id: str, language: str = None) -> Dict:
+        """Get a summary of the session including progress and emotional states"""
+        session = self.db.get_session(session_id)
+        if not session:
+            return None
+            
+        if language:
+            self.localization.switch_language(language)
+            
+        summary = {
+            'start_time': session['start_time'],
+            'message_count': len(session.get('messages', [])),
+            'emotional_states': session.get('emotional_states', []),
+            'progress': session.get('progress', {}),
+            'diagnosis_progress': session.get('diagnosis_progress', {})
+        }
+        
+        # Localize summary if language is Arabic
+        if language == 'ar':
+            summary = self._localize_summary(summary)
+            
+        return summary
+    
+    def _localize_summary(self, summary: Dict) -> Dict:
+        """Localize the summary content to Arabic"""
+        localized = summary.copy()
+        
+        # Localize emotional states
+        if 'emotional_states' in localized:
+            for state in localized['emotional_states']:
+                state['emotion'] = self.localization.get_text(state['emotion'])
+                
+        # Localize progress metrics
+        if 'progress' in localized:
+            localized_progress = {}
+            for key, value in localized['progress'].items():
+                localized_key = self.localization.get_text(key)
+                localized_progress[localized_key] = value
+            localized['progress'] = localized_progress
+            
+        return localized
+        
+    def end_session(self, session) -> str:
+        """End a session and save it to the database
+        
+        Args:
+            session: The session object to end
+            
+        Returns:
+            str: The session ID
+        """
+        # Set end time
+        session['end_time'] = datetime.now()
+        
+        # Calculate session duration
+        start_time = session.get('start_time', datetime.now())
+        session['duration'] = (session['end_time'] - start_time).total_seconds() / 60  # in minutes
+        
+        # Generate simple summary
+        session['summary'] = self._generate_session_summary(session)
         
         # Save to database
-        session_id = self.db.sessions.insert_one(session.to_dict()).inserted_id
-        
-        logger.info(f"Ended session for patient {session_data['patient_id']}")
-        return str(session_id)
+        if 'session_id' in session:
+            self.db.sessions.update_one(
+                {'session_id': session['session_id']},
+                {'$set': session},
+                upsert=True
+            )
+            return session['session_id']
+        else:
+            # If no session_id, create one
+            session['session_id'] = str(datetime.now().timestamp())
+            self.db.sessions.insert_one(session)
+            return session['session_id']
     
-    def add_interaction(self, session_data, user_message, bot_response, emotion_analysis=None):
-        """Add an interaction to the current session
+    def _generate_session_summary(self, session) -> str:
+        """Generate a simple summary of the session
         
         Args:
-            session_data (dict): The session data
-            user_message (str): Message from the user
-            bot_response (str): Response from the bot
-            emotion_analysis (dict, optional): Emotional analysis of the user message
+            session: The session object
             
         Returns:
-            dict: Updated session data
+            str: A summary of the session
         """
-        # Analyze emotions if not provided
-        if not emotion_analysis:
-            emotion_analysis = self.emotion_analyzer.analyze(user_message)
+        # Get language
+        lang = session.get('language', 'en')
+        self.localization.switch_language(lang)
         
-        # Create interaction
-        interaction = Interaction(
-            timestamp=datetime.datetime.now(),
-            user_message=user_message,
-            bot_response=bot_response,
-            emotion_analysis=emotion_analysis,
-            metadata={
-                "session_id": session_data.get("session_id"),
-                "user_id": session_data.get("patient_id")
-            }
-        )
+        # Count interactions
+        interaction_count = len(session.get('interactions', []))
         
-        # Add to session
-        session_data["interactions"].append(interaction.to_dict())
+        # Determine dominant emotions
+        emotions = []
+        for interaction in session.get('interactions', []):
+            if 'emotion_analysis' in interaction and 'dominant_emotion' in interaction['emotion_analysis']:
+                emotions.append(interaction['emotion_analysis']['dominant_emotion'].lower())
         
-        # Update emotional states in metadata
-        if emotion_analysis and "primary_emotion" in emotion_analysis:
-            session_data["metadata"]["emotional_states"].append(emotion_analysis["primary_emotion"])
+        # Count emotion frequencies
+        emotion_counts = {}
+        for emotion in emotions:
+            if emotion in emotion_counts:
+                emotion_counts[emotion] += 1
+            else:
+                emotion_counts[emotion] = 1
         
-        # Classify psychological condition based on conversation
-        if len(session_data["interactions"]) % 5 == 0:  # Classify every 5 interactions
-            condition_classification = self._classify_psychological_condition(session_data)
-            if condition_classification:
-                session_data["metadata"]["condition_classifications"].append(condition_classification)
+        # Get top emotions
+        top_emotions = sorted(emotion_counts.items(), key=lambda x: x[1], reverse=True)[:3]
         
-        return session_data
-    
+        # Generate summary text
+        if lang == 'ar':
+            summary = f"جلسة مع {interaction_count} تفاعلات. "
+            if top_emotions:
+                summary += "المشاعر السائدة: "
+                summary += ", ".join([self.localization.get_text(emotion) for emotion, _ in top_emotions])
+        else:
+            summary = f"Session with {interaction_count} interactions. "
+            if top_emotions:
+                summary += "Dominant emotions: "
+                summary += ", ".join([emotion for emotion, _ in top_emotions])
+        
+        return summary
+        
     def get_previous_session_report(self, patient_id):
-        """Get a report from the previous session
+        """Get a report of the previous session for a patient
         
         Args:
-            patient_id: The ID of the patient
+            patient_id: The patient's ID
             
         Returns:
-            dict: The previous session report or None if no previous session
+            dict: Report data or None if no previous sessions
         """
-        # Get the most recent completed session
+        # Find the most recent session for this patient
         previous_session = self.db.sessions.find_one(
-            {"patient_id": patient_id, "end_time": {"$exists": True}},
-            sort=[("end_time", -1)]
+            {'patient_id': patient_id},
+            sort=[('start_time', -1)]
         )
         
         if not previous_session:
             return None
         
-        # Get patient data
-        patient = self.db.patients.find_one({"_id": patient_id})
-        language = patient.get("language", "en") if patient else "en"
+        # Get language
+        lang = previous_session.get('language', 'en')
+        self.localization.switch_language(lang)
         
-        # Update localization
-        self.localization.switch_language(language)
+        # Format date
+        session_date = previous_session.get('start_time', datetime.now()).strftime('%Y-%m-%d')
         
-        # Generate a brief report
+        # Count interactions
+        interaction_count = len(previous_session.get('interactions', []))
+        
+        # Generate report
         report = {
-            "session_date": previous_session["end_time"].strftime("%Y-%m-%d"),
-            "session_duration": str(previous_session["end_time"] - previous_session["start_time"]),
-            "interaction_count": len(previous_session.get("interactions", [])),
-            "summary": previous_session.get("summary", self.localization.get_text("no_summary_available")),
-            "emotional_trends": self._extract_emotional_trends(previous_session),
-            "progress_indicators": self._extract_progress_indicators(previous_session),
-            "recommendations": previous_session.get("metrics", {}).get("recommendations", [])
+            'session_date': session_date,
+            'interaction_count': interaction_count,
+            'summary': previous_session.get('summary', self.localization.get_text('no_summary_available')),
+            'emotional_trends': self._extract_emotional_trends(previous_session, lang),
+            'progress_indicators': self._extract_progress_indicators(previous_session, lang),
+            'recommendations': self._generate_recommendations(previous_session, lang)
         }
         
         return report
     
-    def _generate_session_summary(self, session_data):
-        """Generate a summary of the session
+    def _extract_emotional_trends(self, session, lang):
+        """Extract emotional trends from a session
         
         Args:
-            session_data (dict): The session data
+            session: The session object
+            lang: Language code
             
         Returns:
-            str: The session summary
-        """
-        # Extract key information
-        interaction_count = len(session_data.get("interactions", []))
-        duration = datetime.datetime.now() - session_data.get("start_time", datetime.datetime.now())
-        
-        # Extract emotional states
-        emotional_states = session_data.get("metadata", {}).get("emotional_states", [])
-        dominant_emotions = []
-        if emotional_states:
-            # Count emotion frequencies
-            emotion_counts = {}
-            for emotion in emotional_states:
-                if emotion in emotion_counts:
-                    emotion_counts[emotion] += 1
-                else:
-                    emotion_counts[emotion] = 1
-            
-            # Get the top 3 emotions
-            dominant_emotions = sorted(emotion_counts.items(), key=lambda x: x[1], reverse=True)[:3]
-            dominant_emotions = [emotion for emotion, count in dominant_emotions]
-        
-        # Generate summary
-        summary = f"Session lasted {duration.total_seconds() // 60} minutes with {interaction_count} interactions. "
-        
-        if dominant_emotions:
-            summary += f"Dominant emotions: {', '.join(dominant_emotions)}. "
-        
-        # Add condition classifications if available
-        condition_classifications = session_data.get("metadata", {}).get("condition_classifications", [])
-        if condition_classifications:
-            # Get the most recent classification
-            latest_classification = condition_classifications[-1]
-            summary += f"Psychological assessment indicates {latest_classification}. "
-        
-        return summary
-    
-    def _calculate_session_metrics(self, session_data):
-        """Calculate metrics for the session
-        
-        Args:
-            session_data (dict): The session data
-            
-        Returns:
-            dict: The session metrics
-        """
-        metrics = {
-            "interaction_count": len(session_data.get("interactions", [])),
-            "session_duration": str(datetime.datetime.now() - session_data.get("start_time", datetime.datetime.now())),
-            "emotional_states": session_data.get("metadata", {}).get("emotional_states", []),
-            "techniques_used": session_data.get("metadata", {}).get("techniques_used", []),
-            "condition_classifications": session_data.get("metadata", {}).get("condition_classifications", [])
-        }
-        
-        # Calculate emotional trend
-        emotional_states = session_data.get("metadata", {}).get("emotional_states", [])
-        if emotional_states:
-            # Simplified emotional valence calculation
-            positive_emotions = ["joy", "happiness", "excitement", "gratitude", "contentment", "hope"]
-            negative_emotions = ["sadness", "anger", "fear", "anxiety", "frustration", "guilt", "shame"]
-            
-            positive_count = sum(1 for emotion in emotional_states if emotion.lower() in positive_emotions)
-            negative_count = sum(1 for emotion in emotional_states if emotion.lower() in negative_emotions)
-            
-            total_count = len(emotional_states)
-            if total_count > 0:
-                positive_ratio = positive_count / total_count
-                negative_ratio = negative_count / total_count
-                
-                metrics["emotional_trend"] = {
-                    "positive_ratio": positive_ratio,
-                    "negative_ratio": negative_ratio,
-                    "neutral_ratio": 1 - (positive_ratio + negative_ratio)
-                }
-        
-        # Calculate engagement metrics
-        interactions = session_data.get("interactions", [])
-        if interactions:
-            # Calculate average response time
-            response_times = []
-            for i in range(1, len(interactions)):
-                if "timestamp" in interactions[i] and "timestamp" in interactions[i-1]:
-                    response_time = (interactions[i]["timestamp"] - interactions[i-1]["timestamp"]).total_seconds()
-                    response_times.append(response_time)
-            
-            if response_times:
-                metrics["average_response_time"] = sum(response_times) / len(response_times)
-            
-            # Calculate message length trends
-            user_message_lengths = [len(interaction.get("user_message", "")) for interaction in interactions]
-            if user_message_lengths:
-                metrics["average_message_length"] = sum(user_message_lengths) / len(user_message_lengths)
-                
-                # Check for increasing engagement
-                first_half = user_message_lengths[:len(user_message_lengths)//2]
-                second_half = user_message_lengths[len(user_message_lengths)//2:]
-                
-                if first_half and second_half:
-                    first_half_avg = sum(first_half) / len(first_half)
-                    second_half_avg = sum(second_half) / len(second_half)
-                    
-                    metrics["engagement_trend"] = "increasing" if second_half_avg > first_half_avg else "decreasing"
-        
-        # Calculate therapeutic technique effectiveness
-        techniques_used = session_data.get("metadata", {}).get("techniques_used", [])
-        if techniques_used:
-            technique_counts = {}
-            for technique in techniques_used:
-                technique_counts[technique] = technique_counts.get(technique, 0) + 1
-            
-            metrics["technique_usage"] = technique_counts
-            
-            # Calculate effectiveness by emotional state changes after technique use
-            if emotional_states and len(emotional_states) == len(techniques_used):
-                technique_effectiveness = {}
-                
-                for i in range(1, len(techniques_used)):
-                    technique = techniques_used[i-1]
-                    prev_emotion = emotional_states[i-1] if i-1 < len(emotional_states) else None
-                    curr_emotion = emotional_states[i] if i < len(emotional_states) else None
-                    
-                    if prev_emotion and curr_emotion:
-                        # Check if emotion improved
-                        prev_is_negative = prev_emotion.lower() in negative_emotions
-                        curr_is_negative = curr_emotion.lower() in negative_emotions
-                        
-                        if prev_is_negative and not curr_is_negative:
-                            # Emotion improved
-                            if technique not in technique_effectiveness:
-                                technique_effectiveness[technique] = {"improved": 0, "total": 0}
-                            
-                            technique_effectiveness[technique]["improved"] += 1
-                            technique_effectiveness[technique]["total"] += 1
-                        else:
-                            # Emotion didn't improve
-                            if technique not in technique_effectiveness:
-                                technique_effectiveness[technique] = {"improved": 0, "total": 0}
-                            
-                            technique_effectiveness[technique]["total"] += 1
-                
-                # Calculate effectiveness percentages
-                for technique, stats in technique_effectiveness.items():
-                    if stats["total"] > 0:
-                        stats["effectiveness_percentage"] = (stats["improved"] / stats["total"]) * 100
-                
-                metrics["technique_effectiveness"] = technique_effectiveness
-        
-        return metrics
-    
-    def _classify_psychological_condition(self, session_data):
-        """Classify the psychological condition based on conversation content
-        
-        Args:
-            session_data (dict): The session data
-            
-        Returns:
-            str: The classified condition or None if unable to classify
-        """
-        try:
-            # Extract recent interactions
-            interactions = session_data.get("interactions", [])
-            if len(interactions) < 3:  # Need at least 3 interactions for meaningful classification
-                return None
-            
-            # Extract user messages and emotion analyses
-            user_messages = [interaction.get("user_message", "") for interaction in interactions[-5:]]
-            emotion_analyses = [interaction.get("emotion_analysis", {}) for interaction in interactions[-5:]]
-            
-            # Combine messages for analysis
-            combined_text = "\n".join(user_messages)
-            
-            # Create the prompt for condition classification
-            prompt = f"""
-            Based on the following user messages and emotional analyses, classify the most likely psychological condition.
-            Focus on identifying patterns that might indicate depression, anxiety, bipolar disorder, OCD, or other conditions.
-            
-            User messages:
-            {combined_text}
-            
-            Emotional analyses:
-            {json.dumps(emotion_analyses, indent=2)}
-            
-            Provide a single classification as one of: "depression", "anxiety", "bipolar", "ocd", "adjustment_disorder", "ptsd", "general_stress", or "unclear".
-            
-            Classification:
-            """
-            
-            # Use the emotion analyzer's model for classification
-            response = self.emotion_analyzer.model.generate_content(prompt)
-            
-            # Extract the classification
-            classification = response.text.strip().lower()
-            
-            # Validate the classification
-            valid_classifications = ["depression", "anxiety", "bipolar", "ocd", "adjustment_disorder", "ptsd", "general_stress", "unclear"]
-            if classification in valid_classifications:
-                return classification
-            else:
-                return "unclear"
-            
-        except Exception as e:
-            logger.error(f"Error classifying psychological condition: {e}")
-            return None
-    
-    def _extract_emotional_trends(self, session_data):
-        """Extract emotional trends from the session
-        
-        Args:
-            session_data (dict): The session data
-            
-        Returns:
-            list: The emotional trends
+            list: List of emotional trend descriptions
         """
         trends = []
+        emotions = []
         
-        # Extract emotional states from interactions
-        emotional_states = []
-        for interaction in session_data.get("interactions", []):
-            if "emotion_analysis" in interaction and "primary_emotion" in interaction["emotion_analysis"]:
-                emotional_states.append(interaction["emotion_analysis"]["primary_emotion"])
+        # Extract emotions from interactions
+        for interaction in session.get('interactions', []):
+            if 'emotion_analysis' in interaction and 'dominant_emotion' in interaction['emotion_analysis']:
+                emotions.append(interaction['emotion_analysis']['dominant_emotion'].lower())
         
-        if emotional_states:
-            # Count emotion frequencies
-            emotion_counts = {}
-            for emotion in emotional_states:
-                if emotion in emotion_counts:
-                    emotion_counts[emotion] += 1
-                else:
-                    emotion_counts[emotion] = 1
-            
-            # Format trends
-            for emotion, count in sorted(emotion_counts.items(), key=lambda x: x[1], reverse=True):
-                trends.append(f"{emotion}: {count} times")
+        if not emotions:
+            return trends
+        
+        # Count emotion frequencies
+        emotion_counts = {}
+        for emotion in emotions:
+            if emotion in emotion_counts:
+                emotion_counts[emotion] += 1
+            else:
+                emotion_counts[emotion] = 1
+        
+        # Get top emotions
+        top_emotions = sorted(emotion_counts.items(), key=lambda x: x[1], reverse=True)[:3]
+        
+        # Generate trend descriptions
+        for emotion, count in top_emotions:
+            percentage = int((count / len(emotions)) * 100)
+            if lang == 'ar':
+                trends.append(f"{self.localization.get_text(emotion)}: {percentage}% من التفاعلات")
+            else:
+                trends.append(f"{emotion.capitalize()}: {percentage}% of interactions")
         
         return trends
     
-    def _extract_progress_indicators(self, session_data):
-        """Extract progress indicators from the session
+    def _extract_progress_indicators(self, session, lang):
+        """Extract progress indicators from a session
         
         Args:
-            session_data (dict): The session data
+            session: The session object
+            lang: Language code
             
         Returns:
-            list: The progress indicators
+            list: List of progress indicator descriptions
         """
         indicators = []
         
-        # Check for positive emotional shift
-        emotional_states = []
-        for interaction in session_data.get("interactions", []):
-            if "emotion_analysis" in interaction and "primary_emotion" in interaction["emotion_analysis"]:
-                emotional_states.append(interaction["emotion_analysis"]["primary_emotion"])
+        # Check for techniques used
+        techniques = session.get('metadata', {}).get('techniques_used', [])
+        letting_go_count = techniques.count('letting_go')
         
-        if emotional_states:
-            # Simplified emotional valence check
-            positive_emotions = ["joy", "happiness", "excitement", "gratitude", "contentment", "hope"]
-            negative_emotions = ["sadness", "anger", "fear", "anxiety", "frustration", "guilt", "shame"]
-            
-            # Check first half vs second half of session
-            midpoint = len(emotional_states) // 2
-            first_half = emotional_states[:midpoint]
-            second_half = emotional_states[midpoint:]
-            
-            first_half_positive = sum(1 for emotion in first_half if emotion.lower() in positive_emotions)
-            second_half_positive = sum(1 for emotion in second_half if emotion.lower() in positive_emotions)
-            
-            first_half_negative = sum(1 for emotion in first_half if emotion.lower() in negative_emotions)
-            second_half_negative = sum(1 for emotion in second_half if emotion.lower() in negative_emotions)
-            
-            # Check for emotional improvement
-            if len(first_half) > 0 and len(second_half) > 0:
-                if second_half_positive / len(second_half) > first_half_positive / len(first_half):
-                    indicators.append("Increased positive emotions during session")
-                
-                if second_half_negative / len(second_half) < first_half_negative / len(first_half):
-                    indicators.append("Decreased negative emotions during session")
+        if letting_go_count > 0:
+            if lang == 'ar':
+                indicators.append(f"استخدمت تقنية الترك {letting_go_count} مرات")
+            else:
+                indicators.append(f"Used Letting Go technique {letting_go_count} times")
         
-        # Check for engagement
-        if len(session_data.get("interactions", [])) > 5:
-            indicators.append("Sustained engagement throughout session")
+        # Check for emotional shifts
+        emotions = []
+        for interaction in session.get('interactions', []):
+            if 'emotion_analysis' in interaction and 'dominant_emotion' in interaction['emotion_analysis']:
+                emotions.append(interaction['emotion_analysis']['dominant_emotion'].lower())
+        
+        if len(emotions) >= 2:
+            first_half = emotions[:len(emotions)//2]
+            second_half = emotions[len(emotions)//2:]
+            
+            # Check if emotions improved in second half
+            positive_emotions = ['joy', 'happiness', 'calm', 'contentment', 'relief']
+            negative_emotions = ['anger', 'fear', 'sadness', 'disgust', 'anxiety', 'stress']
+            
+            first_half_negative = sum(1 for e in first_half if e in negative_emotions)
+            second_half_negative = sum(1 for e in second_half if e in negative_emotions)
+            
+            first_half_positive = sum(1 for e in first_half if e in positive_emotions)
+            second_half_positive = sum(1 for e in second_half if e in positive_emotions)
+            
+            if second_half_positive > first_half_positive:
+                if lang == 'ar':
+                    indicators.append("زيادة في المشاعر الإيجابية خلال الجلسة")
+                else:
+                    indicators.append("Increase in positive emotions during the session")
+            
+            if second_half_negative < first_half_negative:
+                if lang == 'ar':
+                    indicators.append("انخفاض في المشاعر السلبية خلال الجلسة")
+                else:
+                    indicators.append("Decrease in negative emotions during the session")
         
         return indicators
+    
+    def _generate_recommendations(self, session, lang):
+        """Generate recommendations based on session data
+        
+        Args:
+            session: The session object
+            lang: Language code
+            
+        Returns:
+            list: List of recommendations
+        """
+        recommendations = []
+        
+        # Check for techniques used
+        techniques = session.get('metadata', {}).get('techniques_used', [])
+        letting_go_count = techniques.count('letting_go')
+        
+        if letting_go_count == 0:
+            if lang == 'ar':
+                recommendations.append("جرب تقنية الترك للمساعدة في التعامل مع المشاعر السلبية")
+            else:
+                recommendations.append("Try the Letting Go technique to help deal with negative emotions")
+        
+        # Check for emotional patterns
+        emotions = []
+        for interaction in session.get('interactions', []):
+            if 'emotion_analysis' in interaction and 'dominant_emotion' in interaction['emotion_analysis']:
+                emotions.append(interaction['emotion_analysis']['dominant_emotion'].lower())
+        
+        if emotions:
+            # Check for persistent negative emotions
+            negative_emotions = ['anger', 'fear', 'sadness', 'disgust', 'anxiety', 'stress']
+            negative_count = sum(1 for e in emotions if e in negative_emotions)
+            
+            if negative_count > len(emotions) * 0.7:  # More than 70% negative
+                if lang == 'ar':
+                    recommendations.append("تمارين التنفس العميق يمكن أن تساعد في تقليل المشاعر السلبية المستمرة")
+                else:
+                    recommendations.append("Deep breathing exercises can help reduce persistent negative emotions")
+        
+        return recommendations

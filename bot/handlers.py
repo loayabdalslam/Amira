@@ -78,6 +78,9 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         # Initialize session manager if not already done
         if "session_manager" not in context.bot_data:
             context.bot_data["session_manager"] = SessionManager(db, lang)
+            
+        # Set greeting flag to ensure welcome message only appears once
+        context.user_data["greeted"] = True
         
         # Check for previous session report
         previous_report = context.bot_data["session_manager"].get_previous_session_report(patient["_id"])
@@ -419,9 +422,12 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     metadata = {
         'technique': 'letting_go' if use_letting_go else 'standard',
         'language': lang,
-        'session_id': context.user_data["session"]["session_id"],
         'user_id': user.id
     }
+    
+    # Add session_id if it exists
+    if "session_id" in context.user_data["session"]:
+        metadata['session_id'] = context.user_data["session"]["session_id"]
     
     # Add technique used to session metadata
     if "metadata" not in context.user_data["session"]:
@@ -621,6 +627,9 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         # Initialize session manager if not already done
         if "session_manager" not in context.bot_data:
             context.bot_data["session_manager"] = SessionManager(db, lang)
+            
+        # Set greeting flag to ensure welcome message only appears once
+        context.user_data["greeted"] = True
         
         # Get current session data
         session_data = context.user_data.get("session", {})
@@ -683,6 +692,9 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         # Initialize session manager if not already done
         if "session_manager" not in context.bot_data:
             context.bot_data["session_manager"] = SessionManager(db, lang)
+            
+        # Set greeting flag to ensure welcome message only appears once
+        context.user_data["greeted"] = True
         
         # Get the session from database
         session = db.sessions.find_one({"_id": ObjectId(session_id)})
