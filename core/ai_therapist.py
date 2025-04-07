@@ -57,10 +57,12 @@ class AITherapist:
         Returns:
             str: The generated therapeutic response
         """
+        # Use detected language from emotion analysis if available
+        detected_language = emotion_analysis.get("detected_language", language)
         try:
             # Update language if needed
-            if self.localization.language != language:
-                self.localization.switch_language(language)
+            if self.localization.language != detected_language:
+                self.localization.switch_language(detected_language)
             
             # Get the appropriate system prompt based on condition
             system_prompt = self.system_prompts.get(condition, self.system_prompts['unknown'])
@@ -79,7 +81,7 @@ class AITherapist:
             
             # Create the prompt with emotion analysis
             emotion_info = json.dumps(emotion_analysis, indent=2)
-            prompt = f"{system_prompt}\n\nUser's emotional state: {emotion_info}\n\nUser message: {user_message}\n\nTherapeutic response:"
+            prompt = f"{system_prompt}\n\nUser's emotional state: {emotion_info}\n\nUser message: {user_message}\n\nPlease respond in {detected_language} language.\n\nTherapeutic response:"
             
             # Generate response from Gemini 2
             response = self.model.generate_content(prompt)

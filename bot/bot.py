@@ -8,7 +8,7 @@ import config
 from bot.handlers import (
     start_handler, help_handler, message_handler, 
     register_handler, condition_handler, end_conversation_handler,
-    callback_query_handler
+    callback_query_handler,language_handler, nationality_handler, age_handler, education_handler
 )
 
 def setup_bot(db):

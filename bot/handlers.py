@@ -2,6 +2,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 from loguru import logger
 import datetime
+from bson import ObjectId
 
 # Import configuration
 import config
@@ -11,6 +12,7 @@ from core.ai_therapist import AITherapist
 from core.emotion_analyzer import EmotionAnalyzer
 from core.localization import Localization
 from core.letting_go import LettingGoTechnique
+from core.session_manager import SessionManager
 from data.models import Patient, Session, Interaction
 
 # Import reporting module
@@ -25,6 +27,8 @@ localization = Localization(config.DEFAULT_LANGUAGE)
 
 # Initialize letting go technique
 letting_go = LettingGoTechnique(localization)
+
+# Session manager will be initialized with the database connection when the bot starts
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle the /start command to initiate conversation with the bot
@@ -71,12 +75,52 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         
-        # Store current session in context
-        session = {
-            "patient_id": patient["_id"],
-            "start_time": datetime.datetime.now(),
-            "interactions": []
-        }
+        # Initialize session manager if not already done
+        if "session_manager" not in context.bot_data:
+            context.bot_data["session_manager"] = SessionManager(db, lang)
+        
+        # Check for previous session report
+        previous_report = context.bot_data["session_manager"].get_previous_session_report(patient["_id"])
+        
+        # If there's a previous session report, show it
+        if previous_report:
+            report_message = f"*{localization.get_text('therapeutic_report_title')}*\n\n"
+            report_message += f"{localization.get_text('using_since')}: {previous_report['session_date']}\n"
+            report_message += f"{localization.get_text('total_sessions')}: {previous_report['interaction_count']}\n\n"
+            
+            # Add summary
+            report_message += f"*{localization.get_text('overall_assessment')}*\n{previous_report['summary']}\n\n"
+            
+            # Add emotional trends
+            if previous_report['emotional_trends']:
+                report_message += f"*{localization.get_text('emotional_trends')}*\n"
+                for trend in previous_report['emotional_trends'][:3]:  # Show top 3 trends
+                    report_message += f"- {trend}\n"
+                report_message += "\n"
+            
+            # Add progress indicators
+            if previous_report['progress_indicators']:
+                report_message += f"*{localization.get_text('progress_indicators')}*\n"
+                for indicator in previous_report['progress_indicators']:
+                    report_message += f"- {indicator}\n"
+                report_message += "\n"
+            
+            # Add recommendations
+            if previous_report['recommendations']:
+                report_message += f"*{localization.get_text('recommendations')}*\n"
+                for recommendation in previous_report['recommendations'][:2]:  # Show top 2 recommendations
+                    report_message += f"- {recommendation}\n"
+            
+            # Send the report
+            await update.message.reply_text(
+                report_message,
+                parse_mode="Markdown"
+            )
+        
+        # Start a new session
+        session = context.bot_data["session_manager"].start_session(patient["_id"])
+        session["user_id"] = user.id
+        session["language"] = lang
         context.user_data["session"] = session
         return 'CONVERSATION'
     else:
@@ -347,6 +391,10 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     lang = patient.get('language', config.DEFAULT_LANGUAGE)
     localization.switch_language(lang)
     
+    # Initialize session manager if not already done
+    if "session_manager" not in context.bot_data:
+        context.bot_data["session_manager"] = SessionManager(db, lang)
+    
     # Analyze emotions in the message
     emotion_analysis = emotion_analyzer.analyze(message_text)
     
@@ -370,27 +418,38 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # Record interaction with metadata about technique used
     metadata = {
         'technique': 'letting_go' if use_letting_go else 'standard',
-        'language': lang
+        'language': lang,
+        'session_id': context.user_data["session"]["session_id"],
+        'user_id': user.id
     }
     
-    interaction = Interaction(
-        timestamp=datetime.datetime.now(),
-        user_message=message_text,
-        bot_response=response,
-        emotion_analysis=emotion_analysis,
-        metadata=metadata
-    )
+    # Add technique used to session metadata
+    if "metadata" not in context.user_data["session"]:
+        context.user_data["session"]["metadata"] = {"techniques_used": []}
+    if "techniques_used" not in context.user_data["session"]["metadata"]:
+        context.user_data["session"]["metadata"]["techniques_used"] = []
+    context.user_data["session"]["metadata"]["techniques_used"].append('letting_go' if use_letting_go else 'standard')
     
-    # Add to current session
-    context.user_data["session"]["interactions"].append(interaction.to_dict())
+    # Use session manager to add interaction
+    context.user_data["session"] = context.bot_data["session_manager"].add_interaction(
+        context.user_data["session"],
+        message_text,
+        response,
+        emotion_analysis
+    )
     
     # Save session to database periodically
     if len(context.user_data["session"]["interactions"]) % 5 == 0:
+        # Create Session object with enhanced fields
         session = Session(
             patient_id=context.user_data["session"]["patient_id"],
             start_time=context.user_data["session"]["start_time"],
+            session_id=context.user_data["session"]["session_id"],
+            user_id=user.id,
             end_time=datetime.datetime.now(),
-            interactions=context.user_data["session"]["interactions"]
+            interactions=context.user_data["session"]["interactions"],
+            language=lang,
+            condition_classification=context.user_data["session"].get("metadata", {}).get("condition_classifications", [])[-1] if context.user_data["session"].get("metadata", {}).get("condition_classifications", []) else None
         )
         db.sessions.insert_one(session.to_dict())
     
@@ -458,20 +517,31 @@ async def end_conversation_handler(update: Update, context: ContextTypes.DEFAULT
     # Update localization
     localization.switch_language(lang)
     
-    # Save the current session to database
+    # Initialize session manager if not already done
+    if "session_manager" not in context.bot_data:
+        context.bot_data["session_manager"] = SessionManager(db, lang)
+    
+    # Save the current session to database and generate summary
     if "session" in context.user_data:
-        session = Session(
-            patient_id=context.user_data["session"]["patient_id"],
-            start_time=context.user_data["session"]["start_time"],
-            end_time=datetime.datetime.now(),
-            interactions=context.user_data["session"]["interactions"]
+        # Use session manager to end the session
+        session_id = context.bot_data["session_manager"].end_session(context.user_data["session"])
+        
+        # Generate a brief end-of-session report
+        keyboard = [
+            [InlineKeyboardButton(localization.get_text('get_report'), callback_data=f"report_{session_id}")],
+            [InlineKeyboardButton(localization.get_text('view_progress'), callback_data=f"progress_{patient['_id']}")]
+        ]
+        
+        # Send end message with options to view report or progress
+        await update.message.reply_text(
+            localization.get_text('end_conversation'),
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
-        db.sessions.insert_one(session.to_dict())
         
         # Clear session data
         context.user_data.clear()
-    
-    await update.message.reply_text(localization.get_text('end_conversation'))
+    else:
+        await update.message.reply_text(localization.get_text('end_conversation'))
     
     return ConversationHandler.END
 
@@ -548,6 +618,10 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         lang = patient.get('language', config.DEFAULT_LANGUAGE)
         localization.switch_language(lang)
         
+        # Initialize session manager if not already done
+        if "session_manager" not in context.bot_data:
+            context.bot_data["session_manager"] = SessionManager(db, lang)
+        
         # Get current session data
         session_data = context.user_data.get("session", {})
         
@@ -571,8 +645,8 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         for interaction in session_data.get('interactions', []):
             if "emotion_analysis" in interaction:
                 emotion_analysis = interaction["emotion_analysis"]
-                if isinstance(emotion_analysis, dict) and "dominant_emotion" in emotion_analysis:
-                    recent_emotions.append(emotion_analysis["dominant_emotion"])
+                if isinstance(emotion_analysis, dict) and "primary_emotion" in emotion_analysis:
+                    recent_emotions.append(emotion_analysis["primary_emotion"])
         
         if recent_emotions:
             progress_message += f"{localization.get_text('emotional_trends')}\n"
@@ -587,6 +661,89 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         
         await query.edit_message_text(
             progress_message,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
+        
+        return 'CONVERSATION'
+        
+    elif data.startswith("report_"):
+        # Extract session ID from callback data
+        session_id = data.split("_")[1]
+        
+        patient = db.patients.find_one({"telegram_id": user.id})
+        if not patient:
+            await query.edit_message_text("I couldn't find your records. Please start a new conversation with /start.")
+            return ConversationHandler.END
+        
+        # Set language preference
+        lang = patient.get('language', config.DEFAULT_LANGUAGE)
+        localization.switch_language(lang)
+        
+        # Initialize session manager if not already done
+        if "session_manager" not in context.bot_data:
+            context.bot_data["session_manager"] = SessionManager(db, lang)
+        
+        # Get the session from database
+        session = db.sessions.find_one({"_id": ObjectId(session_id)})
+        if not session:
+            await query.edit_message_text(localization.get_text('report_error'))
+            return 'CONVERSATION'
+        
+        # Generate report message
+        report_message = f"*{localization.get_text('therapeutic_report_title')}*\n\n"
+        
+        # Add session information
+        session_date = session.get("end_time", datetime.datetime.now()).strftime("%Y-%m-%d")
+        session_duration = str(session.get("end_time", datetime.datetime.now()) - session.get("start_time", datetime.datetime.now()))
+        interaction_count = len(session.get("interactions", []))
+        
+        report_message += f"{localization.get_text('session_date')}: {session_date}\n"
+        report_message += f"{localization.get_text('session_duration')}: {session_duration}\n"
+        report_message += f"{localization.get_text('interaction_count')}: {interaction_count}\n\n"
+        
+        # Add summary
+        if "summary" in session and session["summary"]:
+            report_message += f"*{localization.get_text('summary')}*\n{session['summary']}\n\n"
+        
+        # Add condition classification if available
+        if "condition_classification" in session and session["condition_classification"]:
+            report_message += f"*{localization.get_text('condition')}*\n{session['condition_classification'].capitalize()}\n\n"
+        
+        # Add emotional trends
+        emotional_states = []
+        for interaction in session.get("interactions", []):
+            if "emotion_analysis" in interaction and "primary_emotion" in interaction["emotion_analysis"]:
+                emotional_states.append(interaction["emotion_analysis"]["primary_emotion"])
+        
+        if emotional_states:
+            # Count emotion frequencies
+            emotion_counts = {}
+            for emotion in emotional_states:
+                if emotion in emotion_counts:
+                    emotion_counts[emotion] += 1
+                else:
+                    emotion_counts[emotion] = 1
+            
+            # Format trends
+            report_message += f"*{localization.get_text('emotional_trends')}*\n"
+            for emotion, count in sorted(emotion_counts.items(), key=lambda x: x[1], reverse=True)[:3]:
+                report_message += f"- {emotion.capitalize()}: {count} times\n"
+            report_message += "\n"
+        
+        # Add recommendations if available
+        if "metrics" in session and "recommendations" in session["metrics"]:
+            report_message += f"*{localization.get_text('recommendations')}*\n"
+            for recommendation in session["metrics"]["recommendations"][:2]:  # Show top 2 recommendations
+                report_message += f"- {recommendation}\n"
+        
+        # Add buttons to start a new conversation
+        keyboard = [
+            [InlineKeyboardButton(localization.get_text('continue_conversation'), callback_data="continue_conversation")]
+        ]
+        
+        await query.edit_message_text(
+            report_message,
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="Markdown"
         )

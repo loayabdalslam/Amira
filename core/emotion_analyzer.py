@@ -4,6 +4,7 @@ import json
 
 # Import configuration
 import config
+from core.localization import Localization
 
 class EmotionAnalyzer:
     """Emotion Analyzer class that uses Gemini 2 to analyze emotions in text
@@ -13,29 +14,63 @@ class EmotionAnalyzer:
     therapeutic response.
     """
     
-    def __init__(self):
-        """Initialize the Emotion Analyzer with Gemini 2 API"""
+    def __init__(self, language='en'):
+        """Initialize the Emotion Analyzer with Gemini 2 API
+        
+        Args:
+            language (str, optional): Language code ('en' or 'ar')
+        """
         # Configure the Gemini API
         genai.configure(api_key=config.GEMINI_API_KEY)
         
         # Get the generative model
         self.model = genai.GenerativeModel('gemini-2.0-flash')
         
-        logger.info("Emotion Analyzer initialized with Gemini 2")
+        # Initialize localization
+        self.localization = Localization(language)
+        
+        logger.info(f"Emotion Analyzer initialized with Gemini 2 in language: {language}")
     
-    def analyze(self, text):
+    def analyze(self, text, language=None):
         """Analyze the emotional content of a text message
         
         Args:
             text (str): The text message to analyze
+            language (str, optional): Language code ('en' or 'ar'). If None, will attempt to detect language.
             
         Returns:
             dict: A dictionary containing emotional analysis results
         """
         try:
+            # Detect language if not provided
+            detected_language = language
+            if not detected_language:
+                # Create prompt for language detection
+                lang_detect_prompt = f"""
+                Identify the language of the following text. Return only the language code:
+                'en' for English or 'ar' for Arabic.
+                
+                Text: {text}
+                
+                Language code (en/ar):
+                """
+                
+                lang_response = self.model.generate_content(lang_detect_prompt)
+                detected_language = lang_response.text.strip().lower()
+                
+                # Validate language code
+                if detected_language not in ['en', 'ar']:
+                    detected_language = 'en'  # Default to English if detection fails
+                
+                logger.info(f"Detected language: {detected_language}")
+            
+            # Update localization if needed
+            if self.localization.language != detected_language:
+                self.localization.switch_language(detected_language)
+            
             # Create the prompt for emotion analysis
             prompt = f"""
-            Analyze the emotional content of the following text and provide a detailed assessment.
+            Analyze the emotional content of the following text in {detected_language} language and provide a detailed assessment.
             Focus on identifying the primary emotions, their intensity, and any patterns or concerns.
             
             For mental health monitoring, also assess:
@@ -50,7 +85,8 @@ class EmotionAnalyzer:
               "mood_state": "string",
               "cognitive_patterns": ["string"],
               "risk_factors": ["string"],
-              "additional_observations": "string"
+              "additional_observations": "string",
+              "detected_language": "{detected_language}"
             }}
             
             Text to analyze: {text}

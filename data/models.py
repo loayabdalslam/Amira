@@ -144,30 +144,43 @@ class Session:
     
     Attributes:
         patient_id (ObjectId): ID of the patient
+        session_id (str): Unique identifier for the session
+        user_id (int): Telegram user ID for direct reference
         start_time (datetime): Start time of the session
         end_time (datetime): End time of the session
         interactions (list): List of interactions during the session
         summary (str): Summary of the session
         metrics (dict): Session metrics and analytics
+        condition_classification (str): Classified psychological condition
+        language (str): Language used in the session ('en' or 'ar')
     """
     
-    def __init__(self, patient_id, start_time, end_time=None, interactions=None, summary=None, metrics=None):
+    def __init__(self, patient_id, start_time, session_id=None, user_id=None, end_time=None, 
+                 interactions=None, summary=None, metrics=None, condition_classification=None, language='en'):
         """Initialize a new Session object
         
         Args:
             patient_id (ObjectId): ID of the patient
             start_time (datetime): Start time of the session
+            session_id (str, optional): Unique identifier for the session
+            user_id (int, optional): Telegram user ID for direct reference
             end_time (datetime, optional): End time of the session
             interactions (list, optional): List of interactions during the session
             summary (str, optional): Summary of the session
             metrics (dict, optional): Session metrics and analytics
+            condition_classification (str, optional): Classified psychological condition
+            language (str, optional): Language used in the session ('en' or 'ar')
         """
         self.patient_id = patient_id
+        self.session_id = session_id or str(start_time.timestamp())
+        self.user_id = user_id
         self.start_time = start_time
         self.end_time = end_time
         self.interactions = interactions or []
         self.summary = summary
         self.metrics = metrics or {}
+        self.condition_classification = condition_classification
+        self.language = language
     
     def to_dict(self):
         """Convert Session object to dictionary for MongoDB storage
@@ -177,11 +190,15 @@ class Session:
         """
         return {
             "patient_id": self.patient_id,
+            "session_id": self.session_id,
+            "user_id": self.user_id,
             "start_time": self.start_time,
             "end_time": self.end_time,
             "interactions": self.interactions,
             "summary": self.summary,
-            "metrics": self.metrics
+            "metrics": self.metrics,
+            "condition_classification": self.condition_classification,
+            "language": self.language
         }
     
     @classmethod
@@ -197,10 +214,14 @@ class Session:
         return cls(
             patient_id=data["patient_id"],
             start_time=data["start_time"],
+            session_id=data.get("session_id"),
+            user_id=data.get("user_id"),
             end_time=data.get("end_time"),
             interactions=data.get("interactions", []),
             summary=data.get("summary"),
-            metrics=data.get("metrics", {})
+            metrics=data.get("metrics", {}),
+            condition_classification=data.get("condition_classification"),
+            language=data.get("language", "en")
         )
 
 class Report:

@@ -31,6 +31,9 @@ def initialize_database():
         # Create indexes for better query performance
         db.patients.create_index('telegram_id', unique=True)
         db.sessions.create_index('patient_id')
+        db.sessions.create_index('session_id')
+        db.sessions.create_index('user_id')
+        db.sessions.create_index([('patient_id', 1), ('start_time', -1)])
         db.reports.create_index([('patient_id', 1), ('creation_date', -1)])
         
         logger.info(f"Connected to MongoDB database: {config.MONGODB_DB_NAME}")
