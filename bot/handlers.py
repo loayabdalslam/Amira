@@ -11,6 +11,9 @@ from core.ai_therapist import AITherapist
 from core.emotion_analyzer import EmotionAnalyzer
 from data.models import Patient, Session, Interaction
 
+# Import reporting module
+from reporting.report_generator import ReportGenerator
+
 # Initialize AI components
 ai_therapist = AITherapist()
 emotion_analyzer = EmotionAnalyzer()
@@ -32,9 +35,18 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     patient = db.patients.find_one({"telegram_id": user.id})
     
     if patient:
+        # Create keyboard with options for returning users
+        keyboard = [
+            [InlineKeyboardButton("View My Progress", callback_data="view_progress")],
+            [InlineKeyboardButton("Get Report", callback_data="get_report")],
+            [InlineKeyboardButton("Continue Conversation", callback_data="continue_conversation")]
+        ]
+        
         await update.message.reply_text(
-            f"Welcome back, {patient['name']}! How are you feeling today?"
+            f"Welcome back, {patient['name']}! What would you like to do today?",
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
+        
         # Store current session in context
         session = {
             "patient_id": patient["_id"],
@@ -98,16 +110,32 @@ async def condition_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     # Get condition from callback data or text message
     condition = update.callback_query.data if update.callback_query else update.message.text.lower()
     
-    # Create new patient record
-    patient = Patient(
-        telegram_id=user.id,
-        name=context.user_data["name"],
-        condition=condition,
-        registration_date=datetime.datetime.now()
-    )
+    # Check if user already exists in database
+    existing_patient = db.patients.find_one({"telegram_id": user.id})
     
-    # Save to database
-    patient_id = db.patients.insert_one(patient.to_dict()).inserted_id
+    if existing_patient:
+        # Update existing patient record
+        db.patients.update_one(
+            {"telegram_id": user.id},
+            {"$set": {
+                "name": context.user_data["name"],
+                "condition": condition
+            }}
+        )
+        patient_id = existing_patient["_id"]
+        logger.info(f"Updated existing patient record for user {user.id}")
+    else:
+        # Create new patient record
+        patient = Patient(
+            telegram_id=user.id,
+            name=context.user_data["name"],
+            condition=condition,
+            registration_date=datetime.datetime.now()
+        )
+        
+        # Save to database
+        patient_id = db.patients.insert_one(patient.to_dict()).inserted_id
+        logger.info(f"Created new patient record for user {user.id}")
     
     # Create initial session
     session = {
@@ -238,22 +266,37 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     
     # Get the callback data
     data = query.data
+    user = update.effective_user
+    db = context.bot_data['db']
     
     if data in config.SUPPORTED_CONDITIONS or data == "unknown":
         # Handle condition selection
-        user = update.effective_user
-        db = context.bot_data['db']
+        # Check if user already exists in database
+        existing_patient = db.patients.find_one({"telegram_id": user.id})
         
-        # Create new patient record
-        patient = Patient(
-            telegram_id=user.id,
-            name=context.user_data["name"],
-            condition=data,
-            registration_date=datetime.datetime.now()
-        )
-        
-        # Save to database
-        patient_id = db.patients.insert_one(patient.to_dict()).inserted_id
+        if existing_patient:
+            # Update existing patient record
+            db.patients.update_one(
+                {"telegram_id": user.id},
+                {"$set": {
+                    "name": context.user_data["name"],
+                    "condition": data
+                }}
+            )
+            patient_id = existing_patient["_id"]
+            logger.info(f"Updated existing patient record for user {user.id} via callback")
+        else:
+            # Create new patient record
+            patient = Patient(
+                telegram_id=user.id,
+                name=context.user_data["name"],
+                condition=data,
+                registration_date=datetime.datetime.now()
+            )
+            
+            # Save to database
+            patient_id = db.patients.insert_one(patient.to_dict()).inserted_id
+            logger.info(f"Created new patient record for user {user.id} via callback")
         
         # Create initial session
         session = {
@@ -277,6 +320,130 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             f"What's been on your mind lately?"
         )
         
+        return 'CONVERSATION'
+    
+    elif data == "view_progress":
+        # Handle view progress button
+        patient = db.patients.find_one({"telegram_id": user.id})
+        if not patient:
+            await query.edit_message_text("I couldn't find your records. Please start a new conversation with /start.")
+            return ConversationHandler.END
+        
+        # Get recent sessions
+        recent_sessions = list(db.sessions.find({"patient_id": patient["_id"]}).sort("start_time", -1).limit(5))
+        
+        # Calculate progress metrics
+        total_sessions = db.sessions.count_documents({"patient_id": patient["_id"]})
+        total_interactions = 0
+        recent_emotions = []
+        
+        for session in recent_sessions:
+            interactions = session.get("interactions", [])
+            total_interactions += len(interactions)
+            for interaction in interactions:
+                if "emotion_analysis" in interaction:
+                    recent_emotions.append(interaction["emotion_analysis"])
+        
+        # Generate progress message
+        progress_message = f"📊 *Your Progress Report*\n\n"
+        progress_message += f"Total Sessions: {total_sessions}\n"
+        progress_message += f"Recent Interactions: {total_interactions}\n\n"
+        
+        # Add emotional trend if available
+        if recent_emotions:
+            # Simplified emotion analysis for display
+            dominant_emotions = []
+            for emotion in recent_emotions:
+                if isinstance(emotion, dict) and "dominant_emotion" in emotion:
+                    dominant_emotions.append(emotion["dominant_emotion"])
+            
+            if dominant_emotions:
+                progress_message += "Recent Emotional Trends:\n"
+                for emotion in set(dominant_emotions):
+                    count = dominant_emotions.count(emotion)
+                    progress_message += f"- {emotion.capitalize()}: {count} times\n"
+        
+        # Add engagement info
+        progress_message += f"\nYou've been using AMIRA since {patient['registration_date'].strftime('%B %d, %Y')}\n"
+        
+        # Add buttons for more options
+        keyboard = [
+            [InlineKeyboardButton("Get Detailed Report", callback_data="get_report")],
+            [InlineKeyboardButton("Continue Conversation", callback_data="continue_conversation")]
+        ]
+        
+        await query.edit_message_text(
+            progress_message,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
+        
+        return 'CONVERSATION'
+    
+    elif data == "get_report":
+        # Handle get report button
+        patient = db.patients.find_one({"telegram_id": user.id})
+        if not patient:
+            await query.edit_message_text("I couldn't find your records. Please start a new conversation with /start.")
+            return ConversationHandler.END
+        
+        await query.edit_message_text("Generating your therapeutic report... This may take a moment.")
+        
+        # Initialize report generator
+        report_generator = ReportGenerator(db)
+        
+        # Generate progress report
+        report = report_generator.generate_progress_report(patient["_id"])
+        
+        if report:
+            # Format report for Telegram message
+            report_content = report.get("content", {})
+            
+            report_message = f"📝 *Your Therapeutic Report*\n\n"
+            
+            # Add overall assessment
+            if "overall_assessment" in report_content:
+                report_message += f"*Overall Assessment:*\n{report_content['overall_assessment']}\n\n"
+            
+            # Add progress indicators
+            if "progress_indicators" in report_content and report_content["progress_indicators"]:
+                report_message += "*Progress Indicators:*\n"
+                for indicator in report_content["progress_indicators"]:
+                    report_message += f"- {indicator}\n"
+                report_message += "\n"
+            
+            # Add recommendations
+            if "recommendations" in report_content and report_content["recommendations"]:
+                report_message += "*Recommendations:*\n"
+                for recommendation in report_content["recommendations"]:
+                    report_message += f"- {recommendation}\n"
+            
+            # Add button to continue conversation
+            keyboard = [
+                [InlineKeyboardButton("Continue Conversation", callback_data="continue_conversation")]
+            ]
+            
+            await query.edit_message_text(
+                report_message,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="Markdown"
+            )
+        else:
+            await query.edit_message_text(
+                "I'm sorry, I couldn't generate a report at this time. Let's continue our conversation instead.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Continue", callback_data="continue_conversation")]])
+            )
+        
+        return 'CONVERSATION'
+    
+    elif data == "continue_conversation":
+        # Handle continue conversation button
+        patient = db.patients.find_one({"telegram_id": user.id})
+        if not patient:
+            await query.edit_message_text("I couldn't find your records. Please start a new conversation with /start.")
+            return ConversationHandler.END
+        
+        await query.edit_message_text(f"How are you feeling today, {patient['name']}? Tell me what's on your mind.")
         return 'CONVERSATION'
     
     return None

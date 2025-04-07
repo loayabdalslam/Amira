@@ -18,9 +18,6 @@ MONGODB_DB_NAME = os.getenv('MONGODB_DB_NAME', 'amira_db')
 DEBUG_MODE = os.getenv('DEBUG_MODE', 'False').lower() == 'true'
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
 
-# Patient Data Configuration
-PATIENT_DATA_DIR = os.getenv('PATIENT_DATA_DIR', 'patient_data')
-
 # Supported Mental Health Conditions
 SUPPORTED_CONDITIONS = [
     'depression',
@@ -30,6 +27,3 @@ SUPPORTED_CONDITIONS = [
 
 # Therapy Session Configuration
 SESSION_TIMEOUT = int(os.getenv('SESSION_TIMEOUT', '1800'))  # 30 minutes in seconds
-
-# Report Generation Configuration
-REPORT_TEMPLATE_DIR = os.getenv('REPORT_TEMPLATE_DIR', 'report_templates')

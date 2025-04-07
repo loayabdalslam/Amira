@@ -2,13 +2,11 @@ import google.generativeai as genai
 from loguru import logger
 import json
 from datetime import datetime
-import os
 
 # Import configuration
 import config
 
-# Import database functions
-from data.database import save_report
+# No need to import save_report as we're storing directly in MongoDB
 
 class ReportGenerator:
     """Report Generator class for creating detailed patient reports
@@ -73,11 +71,8 @@ class ReportGenerator:
                 "metrics": self._calculate_metrics(interactions)
             }
             
-            # Save report to database
+            # Save report to database only
             report_id = self.db.reports.insert_one(report).inserted_id
-            
-            # Save report to file system
-            save_report(patient_id, report_id, report)
             
             logger.info(f"Generated progress report for patient {patient_id}")
             return report
@@ -122,11 +117,8 @@ class ReportGenerator:
                 "metrics": self._calculate_metrics(interactions, comprehensive=True)
             }
             
-            # Save report to database
+            # Save report to database only
             report_id = self.db.reports.insert_one(report).inserted_id
-            
-            # Save report to file system
-            save_report(patient_id, report_id, report)
             
             logger.info(f"Generated assessment report for patient {patient_id}")
             return report

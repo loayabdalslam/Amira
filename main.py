@@ -1,4 +1,3 @@
-import os
 import logging
 from loguru import logger
 
@@ -17,20 +16,7 @@ logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL)
 )
 
-# Create necessary directories if they don't exist
-def setup_directories():
-    # Create patient data directory
-    os.makedirs(config.PATIENT_DATA_DIR, exist_ok=True)
-    logger.info(f"Created patient data directory: {config.PATIENT_DATA_DIR}")
-    
-    # Create report template directory
-    os.makedirs(config.REPORT_TEMPLATE_DIR, exist_ok=True)
-    logger.info(f"Created report template directory: {config.REPORT_TEMPLATE_DIR}")
-
 def main():
-    # Setup necessary directories
-    setup_directories()
-    
     # Initialize database connection
     db = initialize_database()
     logger.info("Database connection initialized")
