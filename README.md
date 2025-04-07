@@ -10,6 +10,8 @@ AMIRA is a comprehensive AI therapist platform designed to interact with human e
 - **Patient Dashboard**: Visualizes treatment journey with metrics like mood trends and engagement frequency
 - **Patient Record System**: Maintains comprehensive records for each patient in dedicated folders
 - **MongoDB Integration**: Tracks patient interactions, emotional states, and treatment progress
+- **Secure Data Handling**: Implements proper error handling and data validation
+- **Comprehensive Testing**: Includes unit tests for core components
 
 ## Technology Stack
 

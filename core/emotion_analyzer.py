@@ -19,7 +19,7 @@ class EmotionAnalyzer:
         genai.configure(api_key=config.GEMINI_API_KEY)
         
         # Get the generative model
-        self.model = genai.GenerativeModel('gemini-pro')
+        self.model = genai.GenerativeModel('gemini-2.0-flash')
         
         logger.info("Emotion Analyzer initialized with Gemini 2")
     
