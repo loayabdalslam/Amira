@@ -55,11 +55,11 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     localization.switch_language(lang)
     
     if patient:
-        # Create keyboard with options for returning users
+        # Create keyboard with options
         keyboard = [
             [InlineKeyboardButton(localization.get_text('view_progress'), callback_data="view_progress")],
             [InlineKeyboardButton(localization.get_text('get_report'), callback_data="get_report")],
-            [InlineKeyboardButton(localization.get_text('continue_conversation'), callback_data="continue_conversation")]
+            [InlineKeyboardButton(localization.get_text('letting_go'), callback_data="letting_go")]
         ]
         
         # Add language selection buttons
@@ -70,10 +70,13 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             )
         keyboard.append(language_buttons)
         
-        await update.message.reply_text(
-            localization.get_text('welcome_back', name=patient['name']),
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        # Send minimal greeting only if not already greeted
+        if not context.user_data.get("greeted"):
+            await update.message.reply_text(
+                localization.get_text('welcome_back', name=patient['name']),
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            context.user_data["greeted"] = True
         
         # Initialize session manager if not already done
         if "session_manager" not in context.bot_data:
@@ -381,13 +384,15 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     db = context.bot_data['db']
     message_text = update.message.text
     
+    # Check for session end triggers
+    end_triggers = ['that\'s it', 'بس كده', 'انتهيت', 'finished']
+    if any(trigger in message_text.lower() for trigger in end_triggers):
+        return await generate_report_handler(update, context)
+    
     # Get patient data
     patient = db.patients.find_one({"telegram_id": user.id})
     if not patient:
-        # Redirect to start if patient record not found
-        await update.message.reply_text(
-            "I couldn't find your records. Let's start over."
-        )
+        await update.message.reply_text("I couldn't find your records. Let's start over.")
         return await start_handler(update, context)
     
     # Set language preference
@@ -398,16 +403,11 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if "session_manager" not in context.bot_data:
         context.bot_data["session_manager"] = SessionManager(db, lang)
     
+    # Show typing indicator
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    
     # Analyze emotions in the message
     emotion_analysis = emotion_analyzer.analyze(message_text)
-    
-    # Determine if we should use the letting go technique
-    # Check if the emotion is negative and could benefit from letting go
-    use_letting_go = False
-    if emotion_analysis and 'dominant_emotion' in emotion_analysis:
-        negative_emotions = ['anger', 'fear', 'sadness', 'disgust', 'anxiety', 'stress']
-        if emotion_analysis['dominant_emotion'].lower() in negative_emotions:
-            use_letting_go = True
     
     # Get conversation history from session if available
     conversation_history = context.user_data["session"].get("conversation_history", [])
@@ -418,7 +418,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         emotion_analysis, 
         patient["condition"],
         language=lang,
-        use_letting_go=use_letting_go,
         conversation_history=conversation_history
     )
     
@@ -440,6 +439,10 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         context.user_data["session"]["metadata"]["techniques_used"] = []
     context.user_data["session"]["metadata"]["techniques_used"].append('letting_go' if use_letting_go else 'standard')
     
+    # Ensure session has session_id
+    if "session_id" not in context.user_data["session"]:
+        context.user_data["session"]["session_id"] = str(datetime.now().timestamp())
+        
     # Use session manager to add interaction
     context.user_data["session"] = context.bot_data["session_manager"].add_interaction(
         context.user_data["session"],
@@ -480,6 +483,38 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             )
     
     return 'CONVERSATION'
+
+async def generate_report_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Generate and send a session report to the user"""
+    user = update.effective_user
+    db = context.bot_data['db']
+    
+    # Get language preference
+    lang = config.DEFAULT_LANGUAGE
+    patient = db.patients.find_one({"telegram_id": user.id})
+    if patient and 'language' in patient:
+        lang = patient['language']
+    
+    # Update localization
+    localization.switch_language(lang)
+    
+    # Generate report
+    report = ReportGenerator.generate_session_report(
+        context.user_data["session"],
+        language=lang
+    )
+    
+    await update.message.reply_text(
+        report,
+        parse_mode="Markdown"
+    )
+    
+    # End the session
+    return await end_conversation_handler(update, context)
+
+async def report_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle the /report command"""
+    return await generate_report_handler(update, context)
 
 async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle the /help command
